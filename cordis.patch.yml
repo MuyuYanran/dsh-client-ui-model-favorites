@@ -1,0 +1,13 @@
+# dsh-client-ui-model-favorites bundle patch: inserts the plugin row into the
+# web profile roster, applied as a profile bundle layer over dsh-base.
+#
+# The row is a bare plugin by package name. The node half (exports ".") is an
+# inert apply that only keeps the plugin present in the host roster; the
+# browser half (exports "./client") ships through the package.json dsh.client
+# declaration and is served at /plugins/<row id>/client.js.
+#
+# Activate by adding the package to the profile's dsh.profile.bundles list, or
+# with `dsh plugin --profile <name> add dsh-client-ui-model-favorites`.
+- insert:
+    - id: ui-model-favorites
+      name: 'dsh-client-ui-model-favorites'
