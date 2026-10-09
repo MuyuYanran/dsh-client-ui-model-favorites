@@ -31,15 +31,24 @@ function createSnapshotStore(init) {
 
 const requireShim = (spec) => {
 	if (spec === "@deepseek-ai/dsh-client-store") return { createSnapshotStore };
-	if (spec === "@deepseek-ai/dsh-client-ui-primitives") return { IconPinFillRegular: () => null };
+	if (spec === "@deepseek-ai/dsh-client-ui-primitives") return { Button: () => null, IconPinFillRegular: () => null };
+	if (spec === "react") return {
+		createElement: (type, props, ...children) => ({ type, props, children }),
+		useSyncExternalStore: () => 0
+	};
 	throw new Error(`unexpected require("${spec}")`);
 };
 
 const registered = [];
+const invoked = [];
 const commandUi = {
 	register(contribution) {
 		registered.push(contribution);
 		return () => {};
+	},
+	invoke(name, ui, session, segment) {
+		invoked.push({ name, ui, session, segment });
+		return void 0;
 	}
 };
 
@@ -68,6 +77,18 @@ const resolver = {
 };
 
 const dictionaries = new Map();
+const slotSeats = [];
+const slots = {
+	inject(key, callback) {
+		const disposer = callback();
+		slotSeats.push({ key, disposer });
+		return () => {};
+	},
+	register(options, component) {
+		return { options, component };
+	}
+};
+let subagentAddressed = false;
 const ctx = {
 	effect: (fn) => { fn(); },
 	locale: {
@@ -77,8 +98,9 @@ const ctx = {
 	inject: (deps, callback) => {
 		callback({
 			modelDirectories: resolver,
-			sessions: { subagentAddress: () => void 0 },
+			sessions: { subagentAddress: () => (subagentAddressed ? "addr" : void 0) },
 			get: (name) => (name === "commandUi" ? commandUi : void 0),
+			slots,
 			effect: (fn) => { fn(); }
 		});
 	}
@@ -100,6 +122,23 @@ check("exports inject list", JSON.stringify(mod.inject) === JSON.stringify(["mod
 mod.apply(ctx);
 check("command registered once", registered.length === 1, registered.length);
 check("command name", registered[0]?.name === "model-favorites", registered[0]?.name);
+
+// The composer toolbar trigger: an additive seat on conversation.input.left.
+check("trigger seat contributed", slotSeats.length === 1 && slotSeats[0].key === "conversation.input.left", slotSeats.map((seat) => seat.key));
+const seat = slotSeats[0]?.disposer;
+check("trigger id and order", seat?.options.id === "model-favorites-trigger" && seat?.options.order === 50 && seat?.options.name === "conversation.input.left", seat?.options);
+const face = seat.options.inject("session-1");
+check("trigger inject face for a regular session", face.sessionId === "session-1" && face.available === true, face);
+subagentAddressed = true;
+const faceSub = seat.options.inject("session-9");
+subagentAddressed = false;
+check("trigger inject face hides for subagents", faceSub.available === false, faceSub);
+const rendered = seat.component(face);
+check("trigger renders the pin button", rendered !== null && typeof rendered.props.onClick === "function", rendered);
+check("trigger renders nothing for subagents", seat.component(faceSub) === null);
+rendered.props.onClick();
+check("trigger opens the favorites popup through commandUi.invoke", invoked.length === 1 && invoked[0].name === "model-favorites" && invoked[0].session.sessionId === "session-1" && invoked[0].segment.via === "enter" && invoked[0].segment.token === "/model-favorites", invoked[0]);
+check("trigger reuses the registered popup spec", invoked[0]?.ui === registered[0].ui);
 
 // The core plugin resolves directories through the same service method.
 const served = resolver.directoryFor("session-1");
