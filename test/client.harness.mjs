@@ -2,6 +2,9 @@
 // Loads the real bundle through a fake __ModuleLoader__ + fake store engine,
 // then drives the plugin's data-layer decoration and /model-favorites command.
 
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
 const registration = { current: null };
 globalThis.window = {
 	__ModuleLoader__: { load: (reg) => { registration.current = reg; } },
@@ -112,8 +115,9 @@ const check = (label, condition, extra) => {
 	if (condition !== true) console.error(`FAIL: ${label}`, extra === void 0 ? "" : JSON.stringify(extra));
 };
 
-const clientPath = process.argv[2];
-await import(new URL(`file:///${clientPath.replace(/\\/gu, "/")}`).href);
+const clientPath = process.argv[2] ?? "./lib/client.js";
+const clientUrl = pathToFileURL(resolve(clientPath)).href;
+await import(clientUrl);
 check("bundle registered its module id", registration.current?.id === "dsh-client-ui-model-favorites", registration.current?.id);
 const mod = registration.current.factory(requireShim);
 check("exports apply", typeof mod.apply === "function");
@@ -135,6 +139,7 @@ subagentAddressed = false;
 check("trigger inject face hides for subagents", faceSub.available === false, faceSub);
 const rendered = seat.component(face);
 check("trigger renders the pin button", rendered !== null && typeof rendered.props.onClick === "function", rendered);
+check("trigger button carries the readable label", JSON.stringify(rendered.children) === JSON.stringify(["收藏"]) && rendered.props["aria-label"] === "收藏置顶", rendered.children);
 check("trigger renders nothing for subagents", seat.component(faceSub) === null);
 rendered.props.onClick();
 check("trigger opens the favorites popup through commandUi.invoke", invoked.length === 1 && invoked[0].name === "model-favorites" && invoked[0].session.sessionId === "session-1" && invoked[0].segment.via === "enter" && invoked[0].segment.token === "/model-favorites", invoked[0]);
@@ -148,8 +153,9 @@ let notifications = 0;
 served.store.subscribe(() => { notifications += 1; });
 
 const before = served.store.getSnapshot();
-check("unpinned order preserved", JSON.stringify(before.groups.map((g) => g.models.map((m) => m.name))) === JSON.stringify([["Alpha", "Beta"], ["Gamma"]]), before.groups.map((g) => g.models.map((m) => m.name)));
-check("unpin returns the raw snapshot identity", before === realStore.getSnapshot());
+const beforeNames = before.groups.map((g) => g.models.map((m) => m.name));
+check("discovery state marks every model with exactly one hollow star", JSON.stringify(beforeNames) === JSON.stringify([["Alpha ☆", "Beta ☆"], ["Gamma ☆"]]), beforeNames);
+check("discovery state preserves the raw order and identity concerns", before.groups[0].models[0].id === "m1" && before.groups[1].id === "p2" && before.current === realStore.getSnapshot().current, before.groups.map((g) => g.id));
 
 const options = await registered[0].ui.options({ sessionId: "session-1" });
 check("options list every model and hide the clear row while empty", options.length === 3, options.map((row) => row.id));
@@ -189,7 +195,11 @@ const rowsWithFavorites = await registered[0].ui.options({ sessionId: "session-1
 const clearRow = rowsWithFavorites[rowsWithFavorites.length - 1];
 check("clear row offered while favorites exist", rowsWithFavorites.length === 4 && clearRow.label === dictionaries.get("modelFavorites").zh["option.clear"], { count: rowsWithFavorites.length, last: clearRow });
 await registered[0].ui.onSelect({ id: clearRow.id });
-check("clear drops every pin", served.store.getSnapshot() === realStore.getSnapshot());
+check("clear drops every pin and returns to the discovery state", (() => {
+	const cleared = served.store.getSnapshot();
+	const names = cleared.groups.flatMap((g) => g.models.map((m) => m.name));
+	return names.length === 3 && names.every((name) => (name.match(/☆/gu) ?? []).length === 1) && cleared.groups[0].id === "p1";
+})(), served.store.getSnapshot().groups.map((g) => g.models.map((m) => m.name)));
 const rowsAfterClear = await registered[0].ui.options({ sessionId: "session-1" });
 check("clear row hidden when empty", rowsAfterClear.length === 3, rowsAfterClear.length);
 
@@ -319,6 +329,57 @@ function makeLegacyEnv({ reactOverrides = {}, primitives: prims, commandUi: cmd,
 	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
 	check("legacy: missing locale service does not fail the load", threw === false);
 	check("legacy: labels fall back to the built-in dictionary", envRegistered.length === 1 && envRegistered[0].label() === "收藏置顶", envRegistered[0]?.label?.());
+}
+
+// ─── Phase 3: client-HMR re-activation stays idempotent ────────────────────
+// Every save re-evaluates the bundle while the previous instance is still
+// installed. That is what stacked one extra star per save in a live window, so
+// a second registered module (same global symbol registry, fresh instance
+// state) must reuse the first one's records instead of decorating again.
+{
+	const hotStore = createSnapshotStore({
+		current: { provider: "p1", model: "m1" },
+		routable: true,
+		groups: [
+			{ id: "p1", name: "Provider One", models: [{ id: "m1", name: "Alpha" }, { id: "m2", name: "Beta" }] },
+			{ id: "p2", name: "Provider Two", models: [{ id: "m3", name: "Gamma" }] }
+		],
+		failures: [],
+		status: "ready",
+		pending: null,
+		error: null
+	});
+	const hotDirectory = { store: hotStore, load: async () => hotStore.getSnapshot(), select: async () => ({ ok: true }), dispose() {} };
+	const hotResolver = { live: { directories: { values: new Set([hotDirectory]) } }, directoryFor: () => hotDirectory };
+	const hotCtx = {
+		effect: (fn) => { fn(); },
+		locale: ctx.locale,
+		inject: (deps, callback) => {
+			callback({
+				modelDirectories: hotResolver,
+				sessions: { subagentAddress: () => void 0 },
+				get: (name) => (name === "commandUi" ? commandUi : void 0),
+				slots,
+				effect: (fn) => { fn(); }
+			});
+		}
+	};
+	mod.apply(hotCtx);
+	const firstRecord = hotResolver[Symbol.for("dsh-client-ui-model-favorites/patched")];
+	registration.current = null;
+	await import(`${clientUrl}?hmr=1`);
+	const hotMod = registration.current.factory(requireShim);
+	check("re-activation is a distinct module evaluation", hotMod.apply !== mod.apply);
+	hotMod.apply(hotCtx);
+	const secondRecord = hotResolver[Symbol.for("dsh-client-ui-model-favorites/patched")];
+	check("re-activation takes over the patch record", firstRecord !== void 0 && secondRecord !== void 0 && secondRecord !== firstRecord && typeof secondRecord.original === "function", { first: firstRecord !== void 0, took: secondRecord !== firstRecord });
+	const hotNames = hotResolver.directoryFor("session-1").store.getSnapshot().groups.map((g) => g.models.map((m) => m.name));
+	check("re-activation keeps exactly one marker per model", JSON.stringify(hotNames) === JSON.stringify([["Alpha ☆", "Beta ☆"], ["Gamma ☆"]]), hotNames);
+	check("re-activation adds no second facade over the same real store", (() => {
+		hotMod.apply(hotCtx);
+		const again = hotResolver.directoryFor("session-1").store.getSnapshot().groups[0].models[0].name;
+		return again === "Alpha ☆" && hotStore.getSnapshot().groups[0].models[0].name === "Alpha";
+	})());
 }
 
 const failed = assertions.filter((entry) => !entry.ok);
