@@ -1,6 +1,6 @@
 {
   "name": "dsh-client-ui-model-favorites",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "DeepSeek Harness web GUI plugin: right-click a model row to favorite it into a top 收藏 group (gold star + divider) or pin it inside its provider group",
   "type": "module",
   "engines": {

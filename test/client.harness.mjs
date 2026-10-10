@@ -129,26 +129,13 @@ check("exports inject gates on the directory service only", JSON.stringify(mod.i
 
 mod.apply(ctx);
 check("both management commands registered", registered.length === 2 && registered[0]?.name === "model-favorites" && registered[1]?.name === "model-pins", registered.map((contribution) => contribution.name));
+check("the pin command keeps its icon", registered[1]?.icon !== void 0);
 
-// The composer toolbar trigger plus the root-overlay row context menu.
-const seat = slotSeats.find((entry) => entry.disposer?.options?.id === "model-favorites-trigger")?.disposer;
+// The row context menu rides the root overlay list seat.
 const menuSeat = slotSeats.find((entry) => entry.disposer?.options?.id === "model-favorites-context-menu")?.disposer;
-check("trigger seat contributed", slotSeats.some((entry) => entry.key === "conversation.input.left"), slotSeats.map((entry) => entry.key));
-check("trigger id and order", seat?.options.id === "model-favorites-trigger" && seat?.options.order === 50 && seat?.options.name === "conversation.input.left", seat?.options);
 check("context menu seat rides the root overlay", menuSeat?.options.name === "shell.overlay" && menuSeat?.options.id === "model-favorites-context-menu", menuSeat?.options);
-const face = seat.options.inject("session-1");
-check("trigger inject face for a regular session", face.sessionId === "session-1" && face.available === true, face);
-subagentAddressed = true;
-const faceSub = seat.options.inject("session-9");
-subagentAddressed = false;
-check("trigger inject face hides for subagents", faceSub.available === false, faceSub);
-const rendered = seat.component(face);
-check("trigger renders the pin button", rendered !== null && typeof rendered.props.onClick === "function", rendered);
-check("trigger button carries the readable label", JSON.stringify(rendered.children) === JSON.stringify(["收藏"]) && rendered.props["aria-label"] === "收藏置顶", rendered.children);
-check("trigger renders nothing for subagents", seat.component(faceSub) === null);
-rendered.props.onClick();
-check("trigger opens the favorites popup through commandUi.invoke", invoked.length === 1 && invoked[0].name === "model-favorites" && invoked[0].session.sessionId === "session-1" && invoked[0].segment.via === "enter" && invoked[0].segment.token === "/model-favorites", invoked[0]);
-check("trigger reuses the registered popup spec", invoked[0]?.ui === registered[0].ui);
+check("nothing claims the composer tool row", slotSeats.every((entry) => entry.key !== "conversation.input.left"), slotSeats.map((entry) => entry.key));
+check("the closed context menu renders nothing", menuSeat.component({}) === null);
 
 // The core plugin resolves directories through the same service method.
 const served = resolver.directoryFor("session-1");
@@ -288,27 +275,27 @@ function makeLegacyEnv({ reactOverrides = {}, primitives: prims, commandUi: cmd,
 	return { mod: legacyMod, legacyCtx, envRegistered, envInvoked, envSeats };
 }
 
-/** The composer toolbar seats only (the root-overlay menu seat rides every kernel). */
-const triggerSeats = (envSeats) => envSeats.filter((entry) => entry.seat?.options?.id === "model-favorites-trigger");
+/** The root-overlay context-menu seats of one legacy environment. */
+const menuSeats = (envSeats) => envSeats.filter((entry) => entry.seat?.options?.id === "model-favorites-context-menu");
 
-// A: primitives without Button/icon — commands lose their icon, no trigger.
+// A: primitives without the icon set — commands lose their icon, the menu seat stays.
 {
 	const { mod, legacyCtx, envRegistered, envSeats } = makeLegacyEnv({ primitives: {} });
 	let threw = false;
 	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
 	check("legacy: missing primitives does not fail the load", threw === false);
 	check("legacy: commands still register without an icon", envRegistered.length === 2 && envRegistered[0].icon === void 0 && envRegistered[1].name === "model-pins", envRegistered.map((contribution) => contribution.name));
-	check("legacy: trigger skipped without icon primitives", triggerSeats(envSeats).length === 0, envSeats.length);
+	check("legacy: the menu seat still registers without primitives", menuSeats(envSeats).length === 1 && menuSeats(envSeats)[0].key === "shell.overlay", envSeats.map((entry) => entry.key));
 }
 
-// B: no popup invocation path — command keeps working, no trigger.
+// B: no popup invocation path — both commands keep working.
 {
 	const { mod, legacyCtx, envRegistered, envSeats } = makeLegacyEnv({ commandUi: {} });
 	let threw = false;
 	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
 	check("legacy: missing commandUi.invoke does not fail the load", threw === false);
 	check("legacy: commands keep their icon without invoke", envRegistered.length === 2 && envRegistered[0].icon !== void 0, envRegistered.length);
-	check("legacy: trigger skipped without invoke", triggerSeats(envSeats).length === 0, envSeats.length);
+	check("legacy: the menu seat does not need the invoke path", menuSeats(envSeats).length === 1, envSeats.length);
 }
 
 // C: no modelDirectories service at all.
@@ -317,7 +304,7 @@ const triggerSeats = (envSeats) => envSeats.filter((entry) => entry.seat?.option
 	let threw = false;
 	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
 	check("legacy: missing modelDirectories does not fail the load", threw === false);
-	check("legacy: nothing registers without a directory service", envRegistered.length === 0 && triggerSeats(envSeats).length === 0, { commands: envRegistered.length, seats: envSeats.length });
+	check("legacy: nothing registers without a directory service", envRegistered.length === 0 && envSeats.length === 0, { commands: envRegistered.length, seats: envSeats.length });
 }
 
 // D: command.register refuses the contribution.
@@ -326,22 +313,21 @@ const triggerSeats = (envSeats) => envSeats.filter((entry) => entry.seat?.option
 	let threw = false;
 	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
 	check("legacy: a refusing command.register does not fail the load", threw === false);
-	check("legacy: no trigger after a refused command", triggerSeats(envSeats).length === 0, envSeats.length);
+	check("legacy: no seat after a refused command", envSeats.length === 0, envSeats.length);
 }
 
-// E: React 17 (no useSyncExternalStore) — the trigger still renders through the fallback hook.
+// E: React 17 (no useSyncExternalStore) — the menu host still mounts.
 {
 	const { mod, legacyCtx, envSeats } = makeLegacyEnv({ commandUi: { invoke: true }, reactOverrides: { useSyncExternalStore: undefined, useState: (init) => [init, () => {}], useEffect: (fn) => { fn(); } } });
 	let threw = false;
 	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
 	check("legacy: react-17 hooks do not fail the load", threw === false);
-	const seats = triggerSeats(envSeats);
-	check("legacy: trigger registers on react 17", seats.length === 1 && seats[0].key === "conversation.input.left", envSeats.map((s) => s.key));
+	const seats = menuSeats(envSeats);
+	check("legacy: the menu host mounts on react 17", seats.length === 1 && seats[0].key === "shell.overlay", envSeats.map((s) => s.key));
 	if (seats[0] !== void 0) {
 		const seat = seats[0].seat;
-		const face = seat.options.inject("session-1");
-		const rendered = seat.component(face);
-		check("legacy: react-17 trigger renders the pin button", rendered !== null && typeof rendered.props.onClick === "function", rendered);
+		const rendered = seat.component(seat.options.inject({}));
+		check("legacy: react-17 menu host renders closed", rendered === null, rendered);
 	}
 }
 
@@ -359,6 +345,10 @@ const triggerSeats = (envSeats) => envSeats.filter((entry) => entry.seat?.option
 // installed. That is what stacked one extra star per save in a live window, so
 // a second registered module (same global symbol registry, fresh instance
 // state) must reuse the first one's records instead of decorating again.
+// The module-level lists are shared by every environment built from this import,
+// so start from empty ones.
+await registered[0].ui.onSelect({ id: "\u0000model-favorites:clear" });
+await registered[1].ui.onSelect({ id: "\u0000model-favorites:clear-pins" });
 {
 	const hotStore = createSnapshotStore({
 		current: { provider: "p1", model: "m1" },
@@ -411,6 +401,54 @@ const triggerSeats = (envSeats) => envSeats.filter((entry) => entry.seat?.option
 		const again = hotResolver.directoryFor("session-1").store.getSnapshot().groups;
 		return again.length === 3 && again.filter((group) => group.id === "dsh-model-favorites").length === 1 && hotStore.getSnapshot().groups.length === 2;
 	})());
+}
+
+// A mounted picker holds whatever `directory.store` gave it. Re-activation used to
+// replace that object and drop its listeners, so the live menu kept reading a dead
+// cache: favoriting changed nothing until a reload. The facade must instead be the
+// same object, rebound to the newest instance and still notifying its subscribers.
+{
+	// The lists are one process-wide store, so start from a known state.
+	await registered[0].ui.onSelect({ id: "\u0000model-favorites:clear" });
+	await registered[1].ui.onSelect({ id: "\u0000model-favorites:clear-pins" });
+	const frozenStore = createSnapshotStore({
+		current: { provider: "p1", model: "m1" },
+		routable: true,
+		groups: [{ id: "p1", name: "Provider One", models: [{ id: "m1", name: "Alpha" }, { id: "m2", name: "Beta" }] }],
+		failures: [],
+		status: "ready",
+		pending: null,
+		error: null
+	});
+	const frozenDirectory = { store: frozenStore, load: async () => frozenStore.getSnapshot(), select: async () => ({ ok: true }), dispose() {} };
+	const frozenResolver = { live: { directories: { values: new Set([frozenDirectory]) } }, directoryFor: () => frozenDirectory };
+	const frozenRegistered = [];
+	const frozenCtx = {
+		effect: (fn) => { fn(); },
+		locale: ctx.locale,
+		inject: (deps, callback) => {
+			callback({
+				modelDirectories: frozenResolver,
+				sessions: { subagentAddress: () => void 0 },
+				get: (name) => (name === "commandUi" ? { register: (contribution) => { frozenRegistered.push(contribution); return () => {}; } } : void 0),
+				slots: { inject: (key, cb) => { cb(); return () => {}; }, register: (options, component) => ({ options, component }) },
+				effect: (fn) => { fn(); }
+			});
+		}
+	};
+	mod.apply(frozenCtx);
+	const mounted = frozenResolver.directoryFor("session-1").store;
+	let mountedNotifications = 0;
+	mounted.subscribe(() => { mountedNotifications += 1; });
+	registration.current = null;
+	await import(`${clientUrl}?hmr=2`);
+	const newer = registration.current.factory(requireShim);
+	newer.apply(frozenCtx);
+	check("a re-activation keeps the store object a mounted picker holds", frozenResolver.directoryFor("session-1").store === mounted);
+	await frozenRegistered.at(-2).ui.onSelect({ id: "p1/m2" });
+	check("the pre-existing subscriber still hears the change", mountedNotifications > 0, mountedNotifications);
+	check("and the mounted store serves the new 收藏 group", mounted.getSnapshot().groups[0]?.id === "dsh-model-favorites", mounted.getSnapshot().groups.map((group) => group.id));
+	check("the re-activated facade reports nothing stale", frozenStore.getSnapshot().groups.length === 1);
 }
 
 // ─── Phase 4: the row-level DOM bridge ─────────────────────────────────────
@@ -624,6 +662,9 @@ const domDocument = (() => {
 	const domMod = registration.current.factory(domShim);
 	domMod.apply(domCtx);
 	// Favorite one model, then build the menu DOM the shipped ModelSelect renders.
+	// The lists are process-wide, so start from empty ones.
+	await domRegistered[0].ui.onSelect({ id: "\u0000model-favorites:clear" });
+	await domRegistered[1].ui.onSelect({ id: "\u0000model-favorites:clear-pins" });
 	await domRegistered[0].ui.onSelect({ id: "p1/m2" });
 	const doc = domDocument.document;
 	const groupOf = (id, label, models) => {
@@ -638,8 +679,11 @@ const domDocument = (() => {
 			const row = doc.createElement("button");
 			row.setAttribute("role", "menuitemradio");
 			row.setAttribute("title", name);
+			// The shipped row is `<button><span class=optionCopy><span class=modelName>`.
 			const copy = doc.createElement("span");
-			copy.textContent = name;
+			const label = doc.createElement("span");
+			label.textContent = name;
+			copy.append(label);
 			row.append(copy);
 			row.datasetKey = key;
 			section.append(row);
@@ -662,6 +706,7 @@ const domDocument = (() => {
 	const plainRow = sections[0].children[1];
 	const favoriteRow = sections[0].children[2];
 	check("the favorite row gains the divider and the yellow star", favoriteRow.querySelectorAll(".dsh-model-favorites-star").length === 1 && favoriteRow.querySelectorAll(".dsh-model-favorites-rule").length === 1, favoriteRow.children.length);
+	check("the marks ride the name span, not the column-flex copy box", favoriteRow.querySelector(".dsh-model-favorites-star")?.parent === favoriteRow.children[0].children[0], favoriteRow.children[0].children.length);
 	check("the plain row stays unmarked", plainRow.querySelectorAll(".dsh-model-favorites-star").length === 0, plainRow.children.length);
 	check("the star carries the gold color inline", favoriteRow.querySelector(".dsh-model-favorites-star") !== null);
 	check("the synthetic section is lifted to the visual top", sections[2].style.order === "-1" && container.style.display === "flex" && container.style.flexDirection === "column", sections[2].style);
