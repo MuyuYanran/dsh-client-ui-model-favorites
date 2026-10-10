@@ -213,6 +213,15 @@ await registered[1].ui.onSelect({ id: clearPinRow.id });
 check("clearing pins returns the raw snapshot identity", served.store.getSnapshot() === realStore.getSnapshot());
 check("clear rows disappear when empty", (await registered[1].ui.options({ sessionId: "session-1" })).length === 3, (await registered[1].ui.options({ sessionId: "session-1" })).length);
 
+// A live window still stacks the store facades an earlier version installed, and
+// those appended one star per layer. Normalization has to erase them without ever
+// appending a marker of its own.
+realStore.update((draft) => { draft.groups[0].models[0].name = "Alpha ☆ ☆ ☆ ☆"; });
+const healed = served.store.getSnapshot();
+check("stale star markers are normalized away", healed.groups[0].models[0].name === "Alpha" && healed.groups[1].models[0].name === "Gamma", healed.groups.map((group) => group.models.map((model) => model.name)));
+realStore.update((draft) => { draft.groups[0].models[0].name = "Alpha"; });
+check("a clean catalog keeps the raw snapshot identity", served.store.getSnapshot() === realStore.getSnapshot());
+
 // dispose() tears the facade subscriptions down.
 served.dispose();
 const notificationsAtDispose = notifications;
