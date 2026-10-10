@@ -671,8 +671,20 @@ const domDocument = (() => {
 	const menuTree = menuSeat?.component({});
 	const labels = (menuTree?.portal?.children ?? []).flatMap((row) => row.children ?? []);
 	check("right-click opens the context menu for that model", menuTree?.portal?.props?.style?.left === "120px" && labels.includes("取消收藏") && labels.includes("置顶"), labels);
+	// The shipped ModelSelect closes on any document `mousedown` outside its own
+	// nodes; the menu has to swallow that event, and must survive its own clicks.
+	const swallowed = [];
+	menuTree.portal.props.onMouseDown({ preventDefault: () => swallowed.push("prevent"), stopPropagation: () => swallowed.push("stop") });
+	check("the menu swallows the mousedown that would close the model list", swallowed.join(",") === "prevent,stop", swallowed);
+	const menuRoot = domDocument.node("div");
+	menuRoot.className = "dsh-model-favorites-menu";
+	const menuRow = domDocument.node("button");
+	menuRoot.append(menuRow);
+	domDocument.dispatch(menuRow, "pointerdown", {});
+	check("a pointer-down inside the menu does not dismiss it", menuSeat.component({}) !== null);
 	menuTree.portal.children[0].props.onClick();
 	check("the menu action toggles the favorite", !domDirectory.store.getSnapshot().groups.some((group) => group.id === "dsh-model-favorites"), domDirectory.store.getSnapshot().groups.map((group) => group.id));
+	check("the menu closes itself after the action", menuSeat.component({}) === null);
 	globalThis.window = domWindow;
 	delete globalThis.document;
 	delete globalThis.MutationObserver;
