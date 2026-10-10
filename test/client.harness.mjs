@@ -200,6 +200,17 @@ await registered[1].ui.onSelect({ id: clearPinRow.id });
 check("clearing pins returns the raw snapshot identity", served.store.getSnapshot() === realStore.getSnapshot());
 check("clear rows disappear when empty", (await registered[1].ui.options({ sessionId: "session-1" })).length === 3, (await registered[1].ui.options({ sessionId: "session-1" })).length);
 
+// 置顶 also works inside the 收藏 group: a pinned favorite leads that group.
+await registered[0].ui.onSelect({ id: "p2/m3" });
+await registered[0].ui.onSelect({ id: "p1/m2" });
+const groupOrder = () => served.store.getSnapshot().groups[0].models.map((model) => model.id);
+check("favorites keep insertion order by default", JSON.stringify(groupOrder()) === JSON.stringify(["p2/m3", "p1/m2"]), groupOrder());
+await registered[1].ui.onSelect({ id: "p1/m2" });
+check("a pinned favorite leads the 收藏 group", JSON.stringify(groupOrder()) === JSON.stringify(["p1/m2", "p2/m3"]), groupOrder());
+await registered[0].ui.onSelect({ id: "\u0000model-favorites:clear" });
+await registered[1].ui.onSelect({ id: "\u0000model-favorites:clear-pins" });
+check("clearing both lists returns the raw snapshot", served.store.getSnapshot() === realStore.getSnapshot());
+
 // A live window still stacks the store facades an earlier version installed, and
 // those appended one star per layer. Normalization has to erase them without ever
 // appending a marker of its own.
@@ -475,6 +486,12 @@ const domDocument = (() => {
 					el.children.push(child);
 				}
 			},
+			insertBefore(child, reference) {
+				child.parent = el;
+				const at = reference === null || reference === void 0 ? el.children.length : el.children.indexOf(reference);
+				el.children.splice(at < 0 ? el.children.length : at, 0, child);
+				return child;
+			},
 			appendChild(child) {
 				el.append(child);
 				return child;
@@ -661,11 +678,13 @@ const domDocument = (() => {
 	};
 	const domMod = registration.current.factory(domShim);
 	domMod.apply(domCtx);
-	// Favorite one model, then build the menu DOM the shipped ModelSelect renders.
-	// The lists are process-wide, so start from empty ones.
+	// Favorite one model, pin two, then build the menu DOM the shipped ModelSelect
+	// renders. The lists are process-wide, so start from empty ones.
 	await domRegistered[0].ui.onSelect({ id: "\u0000model-favorites:clear" });
 	await domRegistered[1].ui.onSelect({ id: "\u0000model-favorites:clear-pins" });
 	await domRegistered[0].ui.onSelect({ id: "p1/m2" });
+	await domRegistered[1].ui.onSelect({ id: "p1/m1" });
+	await domRegistered[1].ui.onSelect({ id: "p1/m2" });
 	const doc = domDocument.document;
 	const groupOf = (id, label, models) => {
 		const section = doc.createElement("div");
@@ -702,12 +721,16 @@ const domDocument = (() => {
 	const observer = hotObservers[preexistingObservers];
 	observer.callback();
 	const sections = container.children;
-	// Section children are [heading, ...rows].
-	const plainRow = sections[0].children[1];
+	// Section children are [heading, ...rows]; the pin order lifts p1/m2 first.
+	const pinnedOnlyRow = sections[0].children[1];
 	const favoriteRow = sections[0].children[2];
+	const plainRow = sections[1].children[1];
 	check("the favorite row gains the divider and the yellow star", favoriteRow.querySelectorAll(".dsh-model-favorites-star").length === 1 && favoriteRow.querySelectorAll(".dsh-model-favorites-rule").length === 1, favoriteRow.children.length);
 	check("the marks ride the name span, not the column-flex copy box", favoriteRow.querySelector(".dsh-model-favorites-star")?.parent === favoriteRow.children[0].children[0], favoriteRow.children[0].children.length);
-	check("the plain row stays unmarked", plainRow.querySelectorAll(".dsh-model-favorites-star").length === 0, plainRow.children.length);
+	check("a favorited and pinned row shows both marks", favoriteRow.querySelectorAll(".dsh-model-favorites-pin").length === 1, favoriteRow.children[0].children[0].children.length);
+	check("the pin leads the name so an ellipsis cannot hide it", pinnedOnlyRow.children[0].children[0].children[0]?.className === "dsh-model-favorites-pin", pinnedOnlyRow.children[0].children[0].children.map((child) => child.className));
+	check("a pinned-only row carries the pin and no star", pinnedOnlyRow.querySelectorAll(".dsh-model-favorites-pin").length === 1 && pinnedOnlyRow.querySelectorAll(".dsh-model-favorites-star").length === 0, pinnedOnlyRow.children[0].children[0].children.length);
+	check("an untouched row stays unmarked", plainRow.querySelectorAll(".dsh-model-favorites-pin").length === 0 && plainRow.querySelectorAll(".dsh-model-favorites-star").length === 0 && plainRow.querySelectorAll(".dsh-model-favorites-rule").length === 0, plainRow.children.length);
 	check("the star carries the gold color inline", favoriteRow.querySelector(".dsh-model-favorites-star") !== null);
 	check("the synthetic section is lifted to the visual top", sections[2].style.order === "-1" && container.style.display === "flex" && container.style.flexDirection === "column", sections[2].style);
 	// A right-click on the favorite row must open the menu for that model.
@@ -715,7 +738,7 @@ const domDocument = (() => {
 	const menuSeat = domSeats.find((entry) => entry.seat?.options?.id === "model-favorites-context-menu")?.seat;
 	const menuTree = menuSeat?.component({});
 	const labels = (menuTree?.portal?.children ?? []).flatMap((row) => row.children ?? []);
-	check("right-click opens the context menu for that model", menuTree?.portal?.props?.style?.left === "120px" && labels.includes("取消收藏") && labels.includes("置顶"), labels);
+	check("right-click opens the context menu for that model", menuTree?.portal?.props?.style?.left === "120px" && labels.includes("取消收藏") && labels.includes("取消置顶"), labels);
 	// The shipped ModelSelect closes on any document `mousedown` outside its own
 	// nodes; the menu has to swallow that event, and must survive its own clicks.
 	const swallowed = [];
