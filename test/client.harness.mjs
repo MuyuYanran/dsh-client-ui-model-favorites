@@ -753,6 +753,19 @@ const domDocument = (() => {
 	menuTree.portal.children[0].props.onClick();
 	check("the menu action toggles the favorite", !domDirectory.store.getSnapshot().groups.some((group) => group.id === "dsh-model-favorites"), domDirectory.store.getSnapshot().groups.map((group) => group.id));
 	check("the menu closes itself after the action", menuSeat.component({}) === null);
+	// The same model also renders inside the synthetic 收藏 section. Both rows must
+	// map: a menu-wide duplicate guard used to let the provider section claim the key
+	// first, leaving the 收藏 row without marks and without a working context menu.
+	await domRegistered[0].ui.onSelect({ id: "p1/m2" });
+	const syntheticRow = sections[2].children[1];
+	observer.callback();
+	check("the 收藏 row is mapped and marked like its provider row", syntheticRow.querySelectorAll(".dsh-model-favorites-star").length === 1 && syntheticRow.querySelectorAll(".dsh-model-favorites-pin").length === 1, syntheticRow.children[0].children[0].children.length);
+	domDocument.dispatch(syntheticRow.querySelector("span"), "contextmenu", { clientX: 40, clientY: 60 });
+	const syntheticMenu = menuSeat?.component({});
+	const syntheticLabels = (syntheticMenu?.portal?.children ?? []).flatMap((row) => row.children ?? []);
+	check("right-clicking the 收藏 row opens its own menu", syntheticMenu?.portal?.props?.style?.left === "40px" && syntheticLabels.includes("取消收藏"), syntheticLabels);
+	syntheticMenu.portal.children[0].props.onClick();
+	check("un-favoriting from the 收藏 group works", !domDirectory.store.getSnapshot().groups.some((group) => group.id === "dsh-model-favorites"), domDirectory.store.getSnapshot().groups.map((group) => group.id));
 	globalThis.window = domWindow;
 	delete globalThis.document;
 	delete globalThis.MutationObserver;
