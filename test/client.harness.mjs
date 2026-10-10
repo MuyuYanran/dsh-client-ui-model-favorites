@@ -117,7 +117,7 @@ await import(new URL(`file:///${clientPath.replace(/\\/gu, "/")}`).href);
 check("bundle registered its module id", registration.current?.id === "dsh-client-ui-model-favorites", registration.current?.id);
 const mod = registration.current.factory(requireShim);
 check("exports apply", typeof mod.apply === "function");
-check("exports inject list", JSON.stringify(mod.inject) === JSON.stringify(["modelDirectories", "commandUi", "sessions", "locale"]), mod.inject);
+check("exports inject gates on the directory service only", JSON.stringify(mod.inject) === JSON.stringify(["modelDirectories"]), mod.inject);
 
 mod.apply(ctx);
 check("command registered once", registered.length === 1, registered.length);
@@ -198,6 +198,128 @@ served.dispose();
 const notificationsAtDispose = notifications;
 await registered[0].ui.onSelect({ id: "p1/m1" });
 check("no notifications after dispose", notifications === notificationsAtDispose, { notificationsAtDispose, notifications });
+
+// ─── Phase 2: legacy-kernel degradation matrix ─────────────────────────────
+// Each scenario re-runs the factory against a thinner kernel surface and
+// asserts the plugin degrades instead of failing the whole plugin-table load.
+
+function makeLegacyEnv({ reactOverrides = {}, primitives: prims, commandUi: cmd, withModels = true, withLocale = true, registerThrows = false } = {}) {
+	const envRegistered = [];
+	const envInvoked = [];
+	const envSeats = [];
+	const command = {
+		register(contribution) {
+			if (registerThrows) throw new Error("kernel refused the contribution");
+			envRegistered.push(contribution);
+			return () => {};
+		},
+		...(cmd?.invoke ? { invoke: (name, ui, session, segment) => { envInvoked.push({ name, ui, session, segment }); } } : {})
+	};
+	const legacyStore = createSnapshotStore({
+		current: { provider: "p1", model: "m1" },
+		routable: true,
+		groups: [
+			{ id: "p1", name: "Provider One", models: [{ id: "m1", name: "Alpha" }] },
+			{ id: "p2", name: "Provider Two", models: [{ id: "m3", name: "Gamma" }] }
+		],
+		failures: [],
+		status: "ready",
+		pending: null,
+		error: null
+	});
+	const dir = { store: legacyStore, load: async () => legacyStore.getSnapshot(), select: async () => ({ ok: true }), dispose() {} };
+	const legacyResolver = { live: { directories: { values: new Set([dir]) } }, directoryFor: () => dir };
+	const legacyCtx = {
+		effect: (fn) => { fn(); },
+		...(withLocale ? { locale: { register: (ns, dicts) => { dictionaries.set(ns, dicts); return () => {}; }, bind: (ns) => (key) => dictionaries.get(ns)?.zh?.[key] ?? key } } : {}),
+		inject: (deps, callback) => {
+			callback({
+				...(withModels ? { modelDirectories: legacyResolver } : {}),
+				sessions: { subagentAddress: () => void 0 },
+				get: (name) => (name === "commandUi" ? command : void 0),
+				slots: {
+					inject: (key, cb) => { envSeats.push({ key, seat: cb() }); return () => {}; },
+					register: (options, component) => ({ options, component })
+				},
+				effect: (fn) => { fn(); }
+			});
+		}
+	};
+	const shim = (spec) => {
+		if (spec === "@deepseek-ai/dsh-client-store") return { createSnapshotStore };
+		if (spec === "@deepseek-ai/dsh-client-ui-primitives") return prims ?? { Button: () => null, IconPinFillRegular: () => null };
+		if (spec === "react") return {
+			createElement: (type, props, ...children) => ({ type, props, children }),
+			useSyncExternalStore: () => 0,
+			...reactOverrides
+		};
+		throw new Error(`unexpected require("${spec}")`);
+	};
+	const legacyMod = registration.current.factory(shim);
+	return { mod: legacyMod, legacyCtx, envRegistered, envInvoked, envSeats };
+}
+
+// A: primitives without Button/icon — command loses its icon, no trigger.
+{
+	const { mod, legacyCtx, envRegistered, envSeats } = makeLegacyEnv({ primitives: {} });
+	let threw = false;
+	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
+	check("legacy: missing primitives does not fail the load", threw === false);
+	check("legacy: command still registers without an icon", envRegistered.length === 1 && envRegistered[0].icon === void 0, envRegistered[0]);
+	check("legacy: trigger skipped without icon primitives", envSeats.length === 0, envSeats.length);
+}
+
+// B: no popup invocation path — command keeps working, no trigger.
+{
+	const { mod, legacyCtx, envRegistered, envSeats } = makeLegacyEnv({ commandUi: {} });
+	let threw = false;
+	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
+	check("legacy: missing commandUi.invoke does not fail the load", threw === false);
+	check("legacy: command keeps its icon without invoke", envRegistered.length === 1 && envRegistered[0].icon !== void 0);
+	check("legacy: trigger skipped without invoke", envSeats.length === 0, envSeats.length);
+}
+
+// C: no modelDirectories service at all.
+{
+	const { mod, legacyCtx, envRegistered, envSeats } = makeLegacyEnv({ withModels: false });
+	let threw = false;
+	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
+	check("legacy: missing modelDirectories does not fail the load", threw === false);
+	check("legacy: nothing registers without a directory service", envRegistered.length === 0 && envSeats.length === 0, { commands: envRegistered.length, seats: envSeats.length });
+}
+
+// D: command.register refuses the contribution.
+{
+	const { mod, legacyCtx, envSeats } = makeLegacyEnv({ registerThrows: true });
+	let threw = false;
+	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
+	check("legacy: a refusing command.register does not fail the load", threw === false);
+	check("legacy: no trigger after a refused command", envSeats.length === 0, envSeats.length);
+}
+
+// E: React 17 (no useSyncExternalStore) — the trigger still renders through the fallback hook.
+{
+	const { mod, legacyCtx, envSeats } = makeLegacyEnv({ commandUi: { invoke: true }, reactOverrides: { useSyncExternalStore: undefined, useState: (init) => [init, () => {}], useEffect: (fn) => { fn(); } } });
+	let threw = false;
+	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
+	check("legacy: react-17 hooks do not fail the load", threw === false);
+	check("legacy: trigger registers on react 17", envSeats.length === 1 && envSeats[0].key === "conversation.input.left", envSeats.map((s) => s.key));
+	if (envSeats[0] !== void 0) {
+		const seat = envSeats[0].seat;
+		const face = seat.options.inject("session-1");
+		const rendered = seat.component(face);
+		check("legacy: react-17 trigger renders the pin button", rendered !== null && typeof rendered.props.onClick === "function", rendered);
+	}
+}
+
+// F: no locale service — the built-in zh dictionary labels everything.
+{
+	const { mod, legacyCtx, envRegistered } = makeLegacyEnv({ withLocale: false });
+	let threw = false;
+	try { mod.apply(legacyCtx); } catch (error) { threw = true; console.error(error); }
+	check("legacy: missing locale service does not fail the load", threw === false);
+	check("legacy: labels fall back to the built-in dictionary", envRegistered.length === 1 && envRegistered[0].label() === "收藏置顶", envRegistered[0]?.label?.());
+}
 
 const failed = assertions.filter((entry) => !entry.ok);
 console.log(`\n${assertions.length - failed.length}/${assertions.length} checks passed`);

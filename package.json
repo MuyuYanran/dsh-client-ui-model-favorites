@@ -1,6 +1,6 @@
 {
   "name": "dsh-client-ui-model-favorites",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "DeepSeek Harness web GUI plugin: favorite (pin) models to the top of the composer model menu and the /model picker, with a /model-favorites command to toggle pins",
   "type": "module",
   "engines": {
@@ -18,7 +18,7 @@
   },
   "dsh": {
     "engines": {
-      "dsh": ">=0.2.0-rc.2"
+      "dsh": ">=0.1.0"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"

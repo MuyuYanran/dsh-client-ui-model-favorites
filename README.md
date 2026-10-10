@@ -73,11 +73,12 @@ dsh plugin --profile desktop remove dsh-client-ui-model-favorites
 
 - 面向 `@deepseek-ai/dsh-client-ui-model-selection` 的公开数据面（`modelDirectories` 服务与目录快照结构）实现，不依赖其内部组件。
 - 若上游调整了目录快照结构（`groups[].models[]`），置顶与 `★` 装饰会退化为空操作，官方 UI 不受影响；控制台会打印 `[model-favorites] failed to wrap modelDirectories.directoryFor` 之类的诊断信息。
+- **旧内核兼容**：所有可选集成面（图标原语、React hooks、弹窗调用路径 `commandUi.invoke`、locale 服务、槽位入口）均按特性检测独立降级；内核没有快照 store（或拒绝持久化选项）时，收藏列表退回内置的 localStorage 实现。唯一硬性依赖是提供快照形态目录 store 的 `modelDirectories` 服务。引擎要求放宽至 `dsh >= 0.1.0`。
 - 节点侧（`lib/index.js`）为空实现，只为让插件出现在宿主 roster 中。
 
 ## 验证
 
-仓库自带一个独立测试脚本，用假的 `window.__ModuleLoader__`、假 store 与假 ctx 驱动真实 `lib/client.js`，覆盖：置顶顺序、`★` 标记、分组上浮、真实 store 不被改写、订阅通知、取消收藏、清空收藏、`dispose()` 退订、以及未收藏时返回原始快照身份（避免无谓重渲染）。
+仓库自带一个独立测试脚本，用假的 `window.__ModuleLoader__`、假 store 与假 ctx 驱动真实 `lib/client.js`，覆盖：置顶顺序、`★` 标记、分组上浮、真实 store 不被改写、订阅通知、取消收藏、清空收藏、`dispose()` 退订、未收藏时返回原始快照身份（避免无谓重渲染）、工具行触发按钮的注册与调用链，以及旧内核降级矩阵（缺图标原语 / 缺弹窗调用路径 / 缺 `modelDirectories` / `register` 拒绝 / React 17 / 缺 locale——六种场景均不炸插件加载）。
 
 ```bash
 node test/client.harness.mjs ./lib/client.js
